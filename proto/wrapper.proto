@@ -1,0 +1,27 @@
+syntax = "proto3";
+package demo;
+
+message OrderPayload {
+  string participantId = 1;
+}
+
+// The "typed" structure we are gradually migrating to.
+message OrderTyped {
+  string id = 1;
+  OrderPayload payload = 2;
+}
+
+// Transitional wrapper: old JSON is embedded as raw bytes (UTF-8)
+// while new typed fields are added alongside.
+message OrderWrapper {
+  string version = 1;     // e.g., "v1-json-wrap", "v2-typed"
+  bytes jsonPayload = 2; // Legacy JSON blob
+  OrderTyped typed = 3;   // New typed fields (optional at first)
+}
+
+// Response (protobuf)
+message OrderResponse {
+  string status = 1;
+  string message = 2;
+  OrderTyped echoed = 3;
+}
