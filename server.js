@@ -24,7 +24,7 @@ app.post('/api/order-json', (req, res) => {
       participantId: String(legacy.payload.participantId ?? '')
     },
   };
-  res.json({ status: 'ok', message: 'JSON path', echoed: typed });
+  res.json({ status: 'ok', message: 'JSON path', data: typed });
 });
 
 // Protobuf endpoint (migration): accepts application/x-protobuf (OrderWrapper), returns OrderResponse (protobuf)
@@ -58,7 +58,7 @@ app.post('/api/order-proto', express.raw({ type: 'application/x-protobuf', limit
     const payload = OrderResponse.create({
       status: 'ok',
       message: msg.version ? `proto path (${msg.version})` : 'proto path',
-      echoed: typed
+      data: typed
     });
     const bytes = OrderResponse.encode(payload).finish();
     res.set('Content-Type', 'application/x-protobuf');

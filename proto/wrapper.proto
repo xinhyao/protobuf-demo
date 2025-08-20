@@ -23,5 +23,5 @@ message OrderWrapper {
 message OrderResponse {
   string status = 1;
   string message = 2;
-  OrderTyped echoed = 3;
+  OrderTyped data = 3;
 }
