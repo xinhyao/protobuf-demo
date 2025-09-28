@@ -1,0 +1,19 @@
+name: Test Webex Bot
+
+on:
+  workflow_dispatch:   # 手动触发
+
+jobs:
+  send-message:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Hello to Webex
+        run: |
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.WEBEX_BOT_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"roomId\": \"${{ secrets.WEBEX_ROOM_ID }}\",
+              \"text\": \"Hello 👋, this is a test message from GitHub Actions!\"
+            }" \
+            https://webexapis.com/v1/messages
