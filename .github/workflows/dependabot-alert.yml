@@ -76,30 +76,34 @@ jobs:
         run: |
           MESSAGE=""
 
-          # # 6a. Dependabot Alerts
-          # if [ "${DEPENDABOT_COUNT}" -gt 0 ]; then
-          #   MESSAGE="$MESSAGE🚨 **Dependabot Alerts for ${{ github.repository }}**"$'\n'
-          #   jq -r '.[] | "- **\(.security_advisory.package.name)**: Severity: \(.security_advisory.severity), Patched: \(.security_advisory.fixed_version // "N/A"), [View Alert](\(.html_url))"' dependabot.json >> db_msg.txt
-          #   MESSAGE="$MESSAGE"$'\n'"$(cat db_msg.txt)"
-          # else
-          #   MESSAGE="$MESSAGE✅ No open Dependabot alerts."
-          # fi
-
-          # 6b. Deprecated 包
-          DEPRECATED_COUNT=$(jq '. | length' deprecated.json)
+          # Dependabot
+          DEPENDABOT_COUNT=$(jq 'length' dependabot.json)
+          if [ "$DEPENDABOT_COUNT" -gt 0 ]; then
+            MESSAGE="$MESSAGE🚨 **Dependabot Alerts**"$'\n'
+            jq -r '.[] | "- **\(.security_advisory.package.name)**: Severity: \(.security_advisory.severity), Patched: \(.security_advisory.fixed_version // "N/A"), [View Alert](\(.html_url))"' dependabot.json >> db_msg.txt
+            MESSAGE="$MESSAGE"$'\n'"$(cat db_msg.txt)"
+          else
+            MESSAGE="$MESSAGE✅ No open Dependabot alerts."
+          fi
+          
+          # Deprecated
+          DEPRECATED_COUNT=$(jq 'length' deprecated.json)
           if [ "$DEPRECATED_COUNT" -gt 0 ]; then
             DEPRECATED_MSG=$(jq -r '.[] | "- **\(.name)**: \(.info)"' deprecated.json)
             MESSAGE="$MESSAGE"$'\n\n⚠️ **Deprecated / Unmaintained NPM packages**"$'\n'"$DEPRECATED_MSG"
           fi
-
+          
           # JSON 转义
-          ESCAPED_MESSAGE=$(echo "$MESSAGE" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
-
+          ESCAPED_MESSAGE=$(python3 - <<EOF
+          import json
+          msg = """$MESSAGE"""
+          print(json.dumps(msg))
+          EOF
+          )
+          
           # 发送 Webex
           curl -s -X POST \
             -H "Authorization: Bearer ${{ secrets.WEBEX_BOT_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"roomId\": \"${{ secrets.WEBEX_ROOM_ID }}\", \"markdown\": $ESCAPED_MESSAGE}" \
             https://webexapis.com/v1/messages
-
-          echo "Message sent to Webex successfully."
