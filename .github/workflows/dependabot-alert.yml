@@ -86,7 +86,7 @@ jobs:
           fi
 
           # 定时任务 提示
-          if [ "${{ github.event_name }}" == "schedule" ]; then
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event_name }}" == "schedule" ]; then
             MESSAGE="⏰ Scheduled/Manual Check for \`${{ github.repository }}\`\n$MESSAGE"
           fi
 
