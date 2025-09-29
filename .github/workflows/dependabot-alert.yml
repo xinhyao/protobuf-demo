@@ -91,7 +91,10 @@ jobs:
           fi
 
           # 写入到文件（避免多行环境变量引号问题）
-          echo "$MESSAGE" > message.txt
+          cat <<'EOF' > message.txt
+          $MESSAGE
+          EOF
+
 
       # 7️⃣ JSON 转义 & 发送 Webex
       - name: Send Alerts to Webex
