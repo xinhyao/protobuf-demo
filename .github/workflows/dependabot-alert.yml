@@ -73,16 +73,6 @@ jobs:
         run: |
           MESSAGE=""
 
-          # Dependabot Alerts
-          DEPENDABOT_COUNT=${{ env.DEPENDABOT_COUNT }}
-          if [ "$DEPENDABOT_COUNT" -gt 0 ]; then
-            MESSAGE="$MESSAGE🚨 **Dependabot Alerts for xinhyao/protobuf-demo**"$'\n'
-            jq -r '.[] | "- **\(.security_advisory.package.name)**: Severity: \(.security_advisory.severity), Patched: \(.security_advisory.fixed_version // "N/A"), [View Alert](\(.security_advisory.references[0].url // "N/A"))"' dependabot.json >> db_msg.txt
-            MESSAGE="$MESSAGE"$'\n'"$(cat db_msg.txt)"
-          else
-            MESSAGE="$MESSAGE✅ No open Dependabot alerts."
-          fi
-
           # Deprecated 包
           DEPRECATED_COUNT=$(jq 'if type=="array" then length else 0 end' deprecated.json)
           if [ "$DEPRECATED_COUNT" -gt 0 ]; then
