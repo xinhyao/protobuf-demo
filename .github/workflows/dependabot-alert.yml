@@ -90,20 +90,17 @@ jobs:
             MESSAGE="$MESSAGE"$'\n\n⚠️ **Deprecated / Unmaintained NPM packages**"$'\n'"$DEPRECATED_MSG"
           fi
 
-          # 导出 MESSAGE 为环境变量
-          echo "MESSAGE<<EOF" >> $GITHUB_ENV
-          echo "$MESSAGE" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          # 写入到文件（避免多行环境变量引号问题）
+          echo "$MESSAGE" > message.txt
 
       # 7️⃣ JSON 转义 & 发送 Webex
       - name: Send Alerts to Webex
         run: |
-          ESCAPED_MESSAGE=$(python3 -c "import json, os; print(json.dumps(os.environ['MESSAGE']))")
+          ESCAPED_MESSAGE=$(python3 -c "import json; print(json.dumps(open('message.txt').read()))")
           curl -s -X POST \
             -H "Authorization: Bearer ${{ secrets.WEBEX_BOT_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"roomId\": \"${{ secrets.WEBEX_ROOM_ID }}\", \"markdown\": $ESCAPED_MESSAGE}" \
             https://webexapis.com/v1/messages
           echo "Message sent to Webex successfully."
-        env:
-          MESSAGE: ${{ env.MESSAGE }}
+
