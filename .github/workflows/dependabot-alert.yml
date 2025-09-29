@@ -1,10 +1,8 @@
 name: Dependabot & Deprecated Alerts to Webex
 
 on:
-  # 定时触发：每 8 小时一次（UTC 时间）
   schedule:
-    - cron: "0 */8 * * *"
-  # 手动触发
+    - cron: "0 */8 * * *"  # 每 8 小时一次（UTC）
   workflow_dispatch:
 
 jobs:
@@ -52,8 +50,7 @@ jobs:
           ALERTS=$(curl -s -H "Authorization: token $DEPENDABOT_PAT" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/xinhyao/protobuf-demo/dependabot/alerts?state=open")
-          
-          # 确保 JSON 为数组，否则使用空数组
+
           IS_ARRAY=$(echo "$ALERTS" | jq 'if type=="array" then true else false end')
           if [ "$IS_ARRAY" != "true" ]; then
             echo "Dependabot API 返回异常，使用空数组替代"
@@ -62,7 +59,6 @@ jobs:
             echo "$ALERTS" > dependabot.json
           fi
 
-          # 打印 JSON 内容到日志，便于调试
           echo "===== Dependabot JSON START ====="
           cat dependabot.json
           echo "===== Dependabot JSON END ====="
@@ -71,7 +67,7 @@ jobs:
           echo "DEPENDABOT_COUNT=$COUNT" >> $GITHUB_ENV
           echo "Dependabot alerts count: $COUNT"
 
-      # 6️⃣ 构建 Webex 消息
+      # 6️⃣ 构建消息
       - name: Build Webex message
         id: message
         run: |
@@ -94,22 +90,20 @@ jobs:
             MESSAGE="$MESSAGE"$'\n\n⚠️ **Deprecated / Unmaintained NPM packages**"$'\n'"$DEPRECATED_MSG"
           fi
 
-          # JSON 转义（多行安全）
-          ESCAPED_MESSAGE=$(python3 - <<EOF
-import json
-msg = """$MESSAGE"""
-print(json.dumps(msg))
-EOF
-)
+          # 导出 MESSAGE 为环境变量
+          echo "MESSAGE<<EOF" >> $GITHUB_ENV
+          echo "$MESSAGE" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
-          echo "ESCAPED_MESSAGE=$ESCAPED_MESSAGE" >> $GITHUB_ENV
-
-      # 7️⃣ 发送 Webex
+      # 7️⃣ JSON 转义 & 发送 Webex
       - name: Send Alerts to Webex
         run: |
+          ESCAPED_MESSAGE=$(python3 -c "import json, os; print(json.dumps(os.environ['MESSAGE']))")
           curl -s -X POST \
             -H "Authorization: Bearer ${{ secrets.WEBEX_BOT_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"roomId\": \"${{ secrets.WEBEX_ROOM_ID }}\", \"markdown\": $ESCAPED_MESSAGE}" \
             https://webexapis.com/v1/messages
           echo "Message sent to Webex successfully."
+        env:
+          MESSAGE: ${{ env.MESSAGE }}
