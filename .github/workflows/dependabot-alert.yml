@@ -1,93 +1,84 @@
-name: Dependabot & Deprecated NPM Alerts to Webex
+name: Dependabot & Deprecated Alerts to Webex
 
 on:
-  # 每 8 小时定时触发
+  # 定时触发：每 8 小时一次（UTC 时间）
   schedule:
     - cron: "0 */8 * * *"
-
   # 手动触发
   workflow_dispatch:
 
 jobs:
   notify:
     runs-on: ubuntu-latest
-
     steps:
-      # 1. Checkout
+      # 1️⃣ Checkout 仓库
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2. Setup Node.js
+      # 2️⃣ Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
-      # 3. 安装依赖
+      # 3️⃣ 安装依赖（仅生成 lock 文件）
       - name: Install dependencies
         run: npm install --package-lock-only
 
-      # 4. 检测 Deprecated 包
+      # 4️⃣ 检测 Deprecated NPM 包
       - name: Check deprecated NPM packages
         id: deprecated
         run: |
           node -e "
-            const { execSync } = require('child_process');
-            const fs = require('fs');
-            const pkg = require('./package.json');
-            const deprecated = [];
-            Object.keys(pkg.dependencies || {}).forEach(name => {
-              try {
-                const info = execSync(\`npm view \${name} deprecated\`).toString().trim();
-                if(info) deprecated.push({name, info});
-              } catch(e) {}
-            });
-            fs.writeFileSync('deprecated.json', JSON.stringify(deprecated, null, 2));
-            console.log('Found ' + deprecated.length + ' deprecated packages');
+          const { execSync } = require('child_process');
+          const fs = require('fs');
+          const pkg = require('./package.json');
+          const deprecated = [];
+          Object.keys(pkg.dependencies || {}).forEach(name => {
+            try {
+              const info = execSync(\`npm view \${name} deprecated\`).toString().trim();
+              if(info) deprecated.push({name, info});
+            } catch(e) {}
+          });
+          fs.writeFileSync('deprecated.json', JSON.stringify(deprecated, null, 2));
           "
 
-      # 5. 拉取 Dependabot Alerts
+      # 5️⃣ 拉取 Dependabot Alerts
       - name: Fetch Dependabot Alerts
         id: dependabot
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPENDABOT_PAT: ${{ secrets.PAT_FOR_DEPENDABOT }}
         run: |
-          ALERTS=$(curl -s -H "Authorization: token ${{ secrets.PAT_FOR_DEPENDABOT }}" \
-          -H "Accept: application/vnd.github+json" \
-          "https://api.github.com/repos/xinhyao/protobuf-demo/dependabot/alerts?state=open")
-
-          # 保存到文件
-          echo "$ALERTS" > dependabot.json
-
-          # 判断是不是数组
+          ALERTS=$(curl -s -H "Authorization: token $DEPENDABOT_PAT" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/xinhyao/protobuf-demo/dependabot/alerts?state=open")
+          
+          # 确保 JSON 为数组，否则使用空数组
           IS_ARRAY=$(echo "$ALERTS" | jq 'if type=="array" then true else false end')
           if [ "$IS_ARRAY" != "true" ]; then
             echo "Dependabot API 返回异常，使用空数组替代"
             echo "[]" > dependabot.json
-            echo "跳过 Dependabot Alerts 处理"
-            DEP_MSG="⚠️ Dependabot Alerts fetch failed. See dependabot.json for details."
           else
-            # 正常处理
-            DEP_MSG=$(jq -r '.[] | "- **\(.security_advisory.package.name)**: Severity: \(.security_advisory.severity), Patched: \(.security_advisory.fixed_version // "N/A"), [View Alert](\(.html_url))"' dependabot.json)
+            echo "$ALERTS" > dependabot.json
           fi
 
-              # ✅ 打印 JSON 内容到 Actions 日志
-              echo "===== Dependabot JSON START ====="
-              cat dependabot.json
-              echo "===== Dependabot JSON END ====="
-          
-              # 保存 alert 数量到环境变量
-              COUNT=$(jq 'length' dependabot.json)
-              echo "DEPENDABOT_COUNT=$COUNT" >> $GITHUB_ENV
-              echo "Dependabot alerts count: $COUNT"
+          # 打印 JSON 内容到日志，便于调试
+          echo "===== Dependabot JSON START ====="
+          cat dependabot.json
+          echo "===== Dependabot JSON END ====="
 
-      # 6. 构建消息并发送 Webex
-      - name: Send Alerts to Webex
+          COUNT=$(jq 'length' dependabot.json)
+          echo "DEPENDABOT_COUNT=$COUNT" >> $GITHUB_ENV
+          echo "Dependabot alerts count: $COUNT"
+
+      # 6️⃣ 构建 Webex 消息
+      - name: Build Webex message
+        id: message
         run: |
           MESSAGE=""
 
           # Dependabot Alerts
-          DEPENDABOT_COUNT=$(jq 'if type=="array" then length else 0 end' dependabot.json)
+          DEPENDABOT_COUNT=${{ env.DEPENDABOT_COUNT }}
           if [ "$DEPENDABOT_COUNT" -gt 0 ]; then
             MESSAGE="$MESSAGE🚨 **Dependabot Alerts for xinhyao/protobuf-demo**"$'\n'
             jq -r '.[] | "- **\(.security_advisory.package.name)**: Severity: \(.security_advisory.severity), Patched: \(.security_advisory.fixed_version // "N/A"), [View Alert](\(.security_advisory.references[0].url // "N/A"))"' dependabot.json >> db_msg.txt
@@ -95,27 +86,30 @@ jobs:
           else
             MESSAGE="$MESSAGE✅ No open Dependabot alerts."
           fi
-          
+
           # Deprecated 包
           DEPRECATED_COUNT=$(jq 'if type=="array" then length else 0 end' deprecated.json)
           if [ "$DEPRECATED_COUNT" -gt 0 ]; then
             DEPRECATED_MSG=$(jq -r '.[] | "- **\(.name)**: \(.info)"' deprecated.json)
             MESSAGE="$MESSAGE"$'\n\n⚠️ **Deprecated / Unmaintained NPM packages**"$'\n'"$DEPRECATED_MSG"
           fi
-          
-          # JSON 转义
+
+          # JSON 转义（多行安全）
           ESCAPED_MESSAGE=$(python3 - <<EOF
-          import json
-          msg = """$MESSAGE"""
-          print(json.dumps(msg))
-          EOF
-          )
-          
-          # 发送 Webex
+import json
+msg = """$MESSAGE"""
+print(json.dumps(msg))
+EOF
+)
+
+          echo "ESCAPED_MESSAGE=$ESCAPED_MESSAGE" >> $GITHUB_ENV
+
+      # 7️⃣ 发送 Webex
+      - name: Send Alerts to Webex
+        run: |
           curl -s -X POST \
             -H "Authorization: Bearer ${{ secrets.WEBEX_BOT_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"roomId\": \"${{ secrets.WEBEX_ROOM_ID }}\", \"markdown\": $ESCAPED_MESSAGE}" \
             https://webexapis.com/v1/messages
-          
           echo "Message sent to Webex successfully."
