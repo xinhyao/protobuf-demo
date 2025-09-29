@@ -1,18 +1,19 @@
-name: Dependabot Alerts to Webex
+name: Dependabot & Deprecated NPM Alerts to Webex
 
 on:
-  # 2️⃣ 定时触发：每天早上9点检测 Deprecated 包
+  # 每 8 小时定时触发
   schedule:
-    - cron: "0 */8 * * *"   # UTC 1点 = 北京时间 9点
+    - cron: "0 */8 * * *"
 
-  # 3️⃣ 手动触发
+  # 手动触发
   workflow_dispatch:
 
 jobs:
   notify:
     runs-on: ubuntu-latest
+
     steps:
-      # 1. Checkout 仓库
+      # 1. Checkout
       - name: Checkout repository
         uses: actions/checkout@v3
 
@@ -22,7 +23,7 @@ jobs:
         with:
           node-version: '18'
 
-      # 3. 安装依赖（仅生成 lock 文件）
+      # 3. 安装依赖
       - name: Install dependencies
         run: npm install --package-lock-only
 
@@ -42,63 +43,53 @@ jobs:
               } catch(e) {}
             });
             fs.writeFileSync('deprecated.json', JSON.stringify(deprecated, null, 2));
-            console.log('::set-output name=deprecated_count::' + deprecated.length);
+            console.log('Found ' + deprecated.length + ' deprecated packages');
           "
 
-      # 5. 构建 Webex 消息
-      - name: Build Webex message
-        id: message
+      # 5. 拉取 Dependabot Alerts
+      - name: Fetch Dependabot Alerts
+        id: dependabot
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ALERTS=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/xinhyao/protobuf-demo/dependabot/alerts?state=open")
+
+          echo "$ALERTS" > dependabot.json
+          COUNT=$(echo "$ALERTS" | jq '. | length')
+          echo "DEPENDABOT_COUNT=$COUNT" >> $GITHUB_ENV
+          echo "Dependabot alerts count: $COUNT"
+
+      # 6. 构建消息并发送 Webex
+      - name: Send Alerts to Webex
         run: |
           MESSAGE=""
 
-          # Dependabot Alert 部分
-          if [ "${{ github.event_name }}" == "dependabot_alert" ]; then
-            ALERTS=""
-
-            SEVERITY="${{ github.event.alert.severity }}"
-            case "$SEVERITY" in
-              critical) EMOJI="🚨"; LEVEL="**CRITICAL**" ;;
-              high) EMOJI="⚠️"; LEVEL="**HIGH**" ;;
-              moderate) EMOJI="🔶"; LEVEL="Moderate" ;;
-              low) EMOJI="ℹ️"; LEVEL="Low" ;;
-              *) EMOJI="❔"; LEVEL="Unknown" ;;
-            esac
-
-            ALERTS="$ALERTS\n$EMOJI **Dependabot Alert in \`${{ github.repository }}\`**\n\n"
-            ALERTS="$ALERTS| Field | Details |\n"
-            ALERTS="$ALERTS|-------|---------|\n"
-            ALERTS="$ALERTS| Package | \`${{ github.event.alert.affected_package_name }}\` |\n"
-            ALERTS="$ALERTS| Severity | $LEVEL |\n"
-            ALERTS="$ALERTS| Vulnerable Version | \`${{ github.event.alert.affected_range }}\` |\n"
-            ALERTS="$ALERTS| Patched Version | \`${{ github.event.alert.fixed_version }}\` |\n"
-            ALERTS="$ALERTS| [View Alert](${{ github.event.alert.html_url }}) | Link |\n"
-
-            MESSAGE="$MESSAGE$ALERTS"
+          # 6a. Dependabot Alerts
+          if [ "${DEPENDABOT_COUNT}" -gt 0 ]; then
+            MESSAGE="$MESSAGE🚨 **Dependabot Alerts for ${{ github.repository }}**"$'\n'
+            jq -r '.[] | "- **\(.security_advisory.package.name)**: Severity: \(.security_advisory.severity), Patched: \(.security_advisory.fixed_version // "N/A"), [View Alert](\(.html_url))"' dependabot.json >> db_msg.txt
+            MESSAGE="$MESSAGE"$'\n'"$(cat db_msg.txt)"
+          else
+            MESSAGE="$MESSAGE✅ No open Dependabot alerts."
           fi
 
-          # Deprecated 包部分
-          DEPRECATED_COUNT=$(cat deprecated.json | jq '. | length')
+          # 6b. Deprecated 包
+          DEPRECATED_COUNT=$(jq '. | length' deprecated.json)
           if [ "$DEPRECATED_COUNT" -gt 0 ]; then
-            MESSAGE="$MESSAGE\n\n⚠️ **Deprecated / Unmaintained NPM packages**\n"
-            jq -r '.[] | "- **\(.name)**: \(.info)"' deprecated.json >> msg.txt
-            cat msg.txt >> message.md
-            MESSAGE="$MESSAGE$(cat msg.txt)"
+            DEPRECATED_MSG=$(jq -r '.[] | "- **\(.name)**: \(.info)"' deprecated.json)
+            MESSAGE="$MESSAGE"$'\n\n⚠️ **Deprecated / Unmaintained NPM packages**"$'\n'"$DEPRECATED_MSG"
           fi
 
-          # 定时任务 提示
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event_name }}" == "schedule" ]; then
-            MESSAGE="⏰ Scheduled/Manual Check for \`${{ github.repository }}\`\n$MESSAGE"
-          fi
+          # JSON 转义
+          ESCAPED_MESSAGE=$(echo "$MESSAGE" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
 
-          echo "MESSAGE<<EOF" >> $GITHUB_ENV
-          echo "$MESSAGE" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-
-      # 6. 发送消息到 Webex
-      - name: Send Alerts to Webex
-        run: |
-          curl -X POST \
+          # 发送 Webex
+          curl -s -X POST \
             -H "Authorization: Bearer ${{ secrets.WEBEX_BOT_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"roomId\": \"${{ secrets.WEBEX_ROOM_ID }}\", \"markdown\": \"${{ env.MESSAGE }}\"}" \
+            -d "{\"roomId\": \"${{ secrets.WEBEX_ROOM_ID }}\", \"markdown\": $ESCAPED_MESSAGE}" \
             https://webexapis.com/v1/messages
+
+          echo "Message sent to Webex successfully."
