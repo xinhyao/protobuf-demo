@@ -1,19 +1,104 @@
-name: Test Webex Bot
+name: Dependabot Alerts to Webex
 
 on:
-  workflow_dispatch:   # 手动触发
+  # 2️⃣ 定时触发：每天早上9点检测 Deprecated 包
+  schedule:
+    - cron: "0 */8 * * *"   # UTC 1点 = 北京时间 9点
+
+  # 3️⃣ 手动触发
+  workflow_dispatch:
 
 jobs:
-  send-message:
+  notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Send Hello to Webex
+      # 1. Checkout 仓库
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2. Setup Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      # 3. 安装依赖（仅生成 lock 文件）
+      - name: Install dependencies
+        run: npm install --package-lock-only
+
+      # 4. 检测 Deprecated 包
+      - name: Check deprecated NPM packages
+        id: deprecated
+        run: |
+          node -e "
+            const { execSync } = require('child_process');
+            const fs = require('fs');
+            const pkg = require('./package.json');
+            const deprecated = [];
+            Object.keys(pkg.dependencies || {}).forEach(name => {
+              try {
+                const info = execSync(\`npm view \${name} deprecated\`).toString().trim();
+                if(info) deprecated.push({name, info});
+              } catch(e) {}
+            });
+            fs.writeFileSync('deprecated.json', JSON.stringify(deprecated, null, 2));
+            console.log('::set-output name=deprecated_count::' + deprecated.length);
+          "
+
+      # 5. 构建 Webex 消息
+      - name: Build Webex message
+        id: message
+        run: |
+          MESSAGE=""
+
+          # Dependabot Alert 部分
+          if [ "${{ github.event_name }}" == "dependabot_alert" ]; then
+            ALERTS=""
+
+            SEVERITY="${{ github.event.alert.severity }}"
+            case "$SEVERITY" in
+              critical) EMOJI="🚨"; LEVEL="**CRITICAL**" ;;
+              high) EMOJI="⚠️"; LEVEL="**HIGH**" ;;
+              moderate) EMOJI="🔶"; LEVEL="Moderate" ;;
+              low) EMOJI="ℹ️"; LEVEL="Low" ;;
+              *) EMOJI="❔"; LEVEL="Unknown" ;;
+            esac
+
+            ALERTS="$ALERTS\n$EMOJI **Dependabot Alert in \`${{ github.repository }}\`**\n\n"
+            ALERTS="$ALERTS| Field | Details |\n"
+            ALERTS="$ALERTS|-------|---------|\n"
+            ALERTS="$ALERTS| Package | \`${{ github.event.alert.affected_package_name }}\` |\n"
+            ALERTS="$ALERTS| Severity | $LEVEL |\n"
+            ALERTS="$ALERTS| Vulnerable Version | \`${{ github.event.alert.affected_range }}\` |\n"
+            ALERTS="$ALERTS| Patched Version | \`${{ github.event.alert.fixed_version }}\` |\n"
+            ALERTS="$ALERTS| [View Alert](${{ github.event.alert.html_url }}) | Link |\n"
+
+            MESSAGE="$MESSAGE$ALERTS"
+          fi
+
+          # Deprecated 包部分
+          DEPRECATED_COUNT=$(cat deprecated.json | jq '. | length')
+          if [ "$DEPRECATED_COUNT" -gt 0 ]; then
+            MESSAGE="$MESSAGE\n\n⚠️ **Deprecated / Unmaintained NPM packages**\n"
+            jq -r '.[] | "- **\(.name)**: \(.info)"' deprecated.json >> msg.txt
+            cat msg.txt >> message.md
+            MESSAGE="$MESSAGE$(cat msg.txt)"
+          fi
+
+          # 定时任务 提示
+          if [ "${{ github.event_name }}" == "schedule" ]; then
+            MESSAGE="⏰ Scheduled/Manual Check for \`${{ github.repository }}\`\n$MESSAGE"
+          fi
+
+          echo "MESSAGE<<EOF" >> $GITHUB_ENV
+          echo "$MESSAGE" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      # 6. 发送消息到 Webex
+      - name: Send Alerts to Webex
         run: |
           curl -X POST \
             -H "Authorization: Bearer ${{ secrets.WEBEX_BOT_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"roomId\": \"${{ secrets.WEBEX_ROOM_ID }}\",
-              \"text\": \"Hello 👋, this is a test message from GitHub Actions!\"
-            }" \
+            -d "{\"roomId\": \"${{ secrets.WEBEX_ROOM_ID }}\", \"markdown\": \"${{ env.MESSAGE }}\"}" \
             https://webexapis.com/v1/messages
