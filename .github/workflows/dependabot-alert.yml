@@ -52,7 +52,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ALERTS=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+          ALERTS=$(curl -s -H "Authorization: token ${{ secrets.PAT_FOR_DEPENDABOT }}" \
           -H "Accept: application/vnd.github+json" \
           "https://api.github.com/repos/xinhyao/protobuf-demo/dependabot/alerts?state=open")
 
@@ -62,8 +62,8 @@ jobs:
           # 判断是不是数组
           IS_ARRAY=$(echo "$ALERTS" | jq 'if type=="array" then true else false end')
           if [ "$IS_ARRAY" != "true" ]; then
-            echo "Dependabot API 返回异常:"
-            cat dependabot.json
+            echo "Dependabot API 返回异常，使用空数组替代"
+            echo "[]" > dependabot.json
             echo "跳过 Dependabot Alerts 处理"
             DEP_MSG="⚠️ Dependabot Alerts fetch failed. See dependabot.json for details."
           else
