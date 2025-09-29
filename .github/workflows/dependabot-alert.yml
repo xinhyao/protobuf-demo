@@ -1,70 +1,109 @@
-name: Dependabot & Deprecated Alerts to Webex
+name: Deprecated NPM packages -> Webex
 
 on:
+  workflow_dispatch:    # 手动触发测试
   schedule:
-    - cron: "0 */8 * * *"  # 每 8 小时一次（UTC）
-  workflow_dispatch:
+    - cron: "0 */8 * * *"  # 每 8 小时运行一次（UTC）
 
 jobs:
   notify:
     runs-on: ubuntu-latest
+
     steps:
-      # 1️⃣ Checkout 仓库
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
-      # 3️⃣ 安装依赖（仅生成 lock 文件）
-      - name: Install dependencies
+      - name: Ensure jq installed
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+
+      - name: Install package-lock only (fast)
         run: npm install --package-lock-only
 
-      # 4️⃣ 检测 Deprecated NPM 包
-      - name: Check deprecated NPM packages
-        id: deprecated
+      - name: Detect deprecated NPM packages
+        id: detect_deprecated
         run: |
-          node -e "
-          const { execSync } = require('child_process');
-          const fs = require('fs');
-          const pkg = require('./package.json');
-          const deprecated = [];
-          Object.keys(pkg.dependencies || {}).forEach(name => {
-            try {
-              const info = execSync(\`npm view \${name} deprecated\`).toString().trim();
-              if(info) deprecated.push({name, info});
-            } catch(e) {}
-          });
-          fs.writeFileSync('deprecated.json', JSON.stringify(deprecated, null, 2));
-          "
-      # 6️⃣ 构建消息
-      - name: Build Webex message
-        id: message
-        run: |
-          MESSAGE=""
+          # 清理旧文件
+          rm -f deprecated_items.json deprecated.json
 
-          # Deprecated 包
-          DEPRECATED_COUNT=$(jq 'if type=="array" then length else 0 end' deprecated.json)
-          if [ "$DEPRECATED_COUNT" -gt 0 ]; then
-            DEPRECATED_MSG=$(jq -r '.[] | "- **\(.name)**: \(.info)"' deprecated.json)
-            MESSAGE="$MESSAGE"$'\n\n⚠️ **Deprecated / Unmaintained NPM packages**'"$'\n'"$DEPRECATED_MSG"
+          # 获取依赖名（dependencies + devDependencies）
+          deps=$(jq -r '(.dependencies // {}) + (.devDependencies // {}) | keys[]' package.json 2>/dev/null || true)
+
+          # 如果没有依赖，写空数组并退出
+          if [ -z "$deps" ]; then
+            echo "[]">deprecated.json
+            echo "0">deprecated_count.txt
+            echo "No dependencies found in package.json"
+            exit 0
           fi
-          
-          # 直接写入文件
-          printf "%s\n" "$MESSAGE" > message.txt
 
+          # 对每个包调用 `npm view <pkg> deprecated`，如果有信息则生成单独 JSON 对象（使用 jq --arg 安全转义）
+          for pkg in $deps; do
+            info=$(npm view "$pkg" deprecated 2>/dev/null || true)
+            if [ -n "$info" ]; then
+              # 生成单条 JSON（安全传参）
+              jq -n --arg name "$pkg" --arg info "$info" '{name:$name, info:$info}' >> deprecated_items.json
+            fi
+          done
 
-      # 7️⃣ JSON 转义 & 发送 Webex
-      - name: Send Alerts to Webex
+          # 合并为数组：如果没有任何条目则写空数组
+          if [ -f deprecated_items.json ]; then
+            jq -s '.' deprecated_items.json > deprecated.json
+          else
+            echo "[]">deprecated.json
+          fi
+
+          # 输出数量
+          count=$(jq 'length' deprecated.json)
+          echo "$count" > deprecated_count.txt
+          echo "Deprecated packages found: $count"
+
+      - name: Build message.txt safely
         run: |
-          ESCAPED_MESSAGE=$(python3 -c "import json; print(json.dumps(open('message.txt').read()))")
-          curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.WEBEX_BOT_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d "{\"roomId\": \"${{ secrets.WEBEX_ROOM_ID }}\", \"markdown\": $ESCAPED_MESSAGE}" \
-            https://webexapis.com/v1/messages
-          echo "Message sent to Webex successfully."
+          # 读取数量
+          DEPRECATED_COUNT=$(cat deprecated_count.txt)
 
+          # 起始头（包含仓库信息）
+          printf "%s\n" "⏰ Scheduled/Manual check for \`${{ github.repository }}\`" > message.txt
+          printf "\n" >> message.txt
+
+          if [ "$DEPRECATED_COUNT" -gt 0 ]; then
+            printf "%s\n" "⚠️ **Deprecated / Unmaintained NPM packages**" >> message.txt
+
+            # 逐行追加每个 deprecated 描述（安全读取）
+            jq -r '.[] | "- **\(.name)**: \(.info)"' deprecated.json | while IFS= read -r line; do
+              printf "%s\n" "$line" >> message.txt
+            done
+          else
+            printf "%s\n" "✅ No deprecated packages found." >> message.txt
+          fi
+
+          # 打印供 Actions 日志查看（调试用）
+          echo "===== message.txt START ====="
+          cat message.txt
+          echo "===== message.txt END ====="
+
+      - name: JSON-escape message and send to Webex
+        env:
+          WEBEX_BOT_TOKEN: ${{ secrets.WEBEX_BOT_TOKEN }}
+          WEBEX_ROOM_ID: ${{ secrets.WEBEX_ROOM_ID }}
+        run: |
+          # 读取 message.txt 并用 Python 做 JSON 转义（安全）
+          ESCAPED_MESSAGE=$(python3 -c "import json; print(json.dumps(open('message.txt').read()))")
+
+          # 发送到 Webex
+          curl -s -X POST \
+            -H "Authorization: Bearer $WEBEX_BOT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"roomId\": \"${WEBEX_ROOM_ID}\", \"markdown\": $ESCAPED_MESSAGE}" \
+            https://webexapis.com/v1/messages
+
+          echo "Message sent to Webex (if credentials correct)."
