@@ -50,13 +50,11 @@ jobs:
           DEPRECATED_COUNT=$(jq 'if type=="array" then length else 0 end' deprecated.json)
           if [ "$DEPRECATED_COUNT" -gt 0 ]; then
             DEPRECATED_MSG=$(jq -r '.[] | "- **\(.name)**: \(.info)"' deprecated.json)
-            MESSAGE="$MESSAGE"$'\n\n⚠️ **Deprecated / Unmaintained NPM packages**"$'\n'"$DEPRECATED_MSG"
+            MESSAGE="$MESSAGE"$'\n\n⚠️ **Deprecated / Unmaintained NPM packages**'"$'\n'"$DEPRECATED_MSG"
           fi
-
-          # 写入到文件（避免多行环境变量引号问题）
-          cat <<'EOF' > message.txt
-          $MESSAGE
-          EOF
+          
+          # 直接写入文件
+          printf "%s\n" "$MESSAGE" > message.txt
 
 
       # 7️⃣ JSON 转义 & 发送 Webex
