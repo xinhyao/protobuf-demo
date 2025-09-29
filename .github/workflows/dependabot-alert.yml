@@ -76,14 +76,14 @@ jobs:
         run: |
           MESSAGE=""
 
-          # 6a. Dependabot Alerts
-          if [ "${DEPENDABOT_COUNT}" -gt 0 ]; then
-            MESSAGE="$MESSAGE🚨 **Dependabot Alerts for ${{ github.repository }}**"$'\n'
-            jq -r '.[] | "- **\(.security_advisory.package.name)**: Severity: \(.security_advisory.severity), Patched: \(.security_advisory.fixed_version // "N/A"), [View Alert](\(.html_url))"' dependabot.json >> db_msg.txt
-            MESSAGE="$MESSAGE"$'\n'"$(cat db_msg.txt)"
-          else
-            MESSAGE="$MESSAGE✅ No open Dependabot alerts."
-          fi
+          # # 6a. Dependabot Alerts
+          # if [ "${DEPENDABOT_COUNT}" -gt 0 ]; then
+          #   MESSAGE="$MESSAGE🚨 **Dependabot Alerts for ${{ github.repository }}**"$'\n'
+          #   jq -r '.[] | "- **\(.security_advisory.package.name)**: Severity: \(.security_advisory.severity), Patched: \(.security_advisory.fixed_version // "N/A"), [View Alert](\(.html_url))"' dependabot.json >> db_msg.txt
+          #   MESSAGE="$MESSAGE"$'\n'"$(cat db_msg.txt)"
+          # else
+          #   MESSAGE="$MESSAGE✅ No open Dependabot alerts."
+          # fi
 
           # 6b. Deprecated 包
           DEPRECATED_COUNT=$(jq '. | length' deprecated.json)
