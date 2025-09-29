@@ -71,23 +71,33 @@ jobs:
             DEP_MSG=$(jq -r '.[] | "- **\(.security_advisory.package.name)**: Severity: \(.security_advisory.severity), Patched: \(.security_advisory.fixed_version // "N/A"), [View Alert](\(.html_url))"' dependabot.json)
           fi
 
+              # ✅ 打印 JSON 内容到 Actions 日志
+              echo "===== Dependabot JSON START ====="
+              cat dependabot.json
+              echo "===== Dependabot JSON END ====="
+          
+              # 保存 alert 数量到环境变量
+              COUNT=$(jq 'length' dependabot.json)
+              echo "DEPENDABOT_COUNT=$COUNT" >> $GITHUB_ENV
+              echo "Dependabot alerts count: $COUNT"
+
       # 6. 构建消息并发送 Webex
       - name: Send Alerts to Webex
         run: |
           MESSAGE=""
 
-          # Dependabot
-          DEPENDABOT_COUNT=$(jq 'length' dependabot.json)
+          # Dependabot Alerts
+          DEPENDABOT_COUNT=$(jq 'if type=="array" then length else 0 end' dependabot.json)
           if [ "$DEPENDABOT_COUNT" -gt 0 ]; then
-            MESSAGE="$MESSAGE🚨 **Dependabot Alerts**"$'\n'
-            jq -r '.[] | "- **\(.security_advisory.package.name)**: Severity: \(.security_advisory.severity), Patched: \(.security_advisory.fixed_version // "N/A"), [View Alert](\(.html_url))"' dependabot.json >> db_msg.txt
+            MESSAGE="$MESSAGE🚨 **Dependabot Alerts for xinhyao/protobuf-demo**"$'\n'
+            jq -r '.[] | "- **\(.security_advisory.package.name)**: Severity: \(.security_advisory.severity), Patched: \(.security_advisory.fixed_version // "N/A"), [View Alert](\(.security_advisory.references[0].url // "N/A"))"' dependabot.json >> db_msg.txt
             MESSAGE="$MESSAGE"$'\n'"$(cat db_msg.txt)"
           else
             MESSAGE="$MESSAGE✅ No open Dependabot alerts."
           fi
           
-          # Deprecated
-          DEPRECATED_COUNT=$(jq 'length' deprecated.json)
+          # Deprecated 包
+          DEPRECATED_COUNT=$(jq 'if type=="array" then length else 0 end' deprecated.json)
           if [ "$DEPRECATED_COUNT" -gt 0 ]; then
             DEPRECATED_MSG=$(jq -r '.[] | "- **\(.name)**: \(.info)"' deprecated.json)
             MESSAGE="$MESSAGE"$'\n\n⚠️ **Deprecated / Unmaintained NPM packages**"$'\n'"$DEPRECATED_MSG"
@@ -107,3 +117,5 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"roomId\": \"${{ secrets.WEBEX_ROOM_ID }}\", \"markdown\": $ESCAPED_MESSAGE}" \
             https://webexapis.com/v1/messages
+          
+          echo "Message sent to Webex successfully."
