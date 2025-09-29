@@ -1,43 +1,36 @@
-name: Deprecated NPM packages -> Webex
+name: Dependabot & Deprecated Alerts to Webex
 
 on:
-  workflow_dispatch:    # 手动触发测试
   schedule:
-    - cron: "0 */8 * * *"  # 每 8 小时运行一次（UTC）
+    - cron: "0 */8 * * *"  # 每 8 小时一次（UTC）
+  workflow_dispatch:
 
 jobs:
   notify:
     runs-on: ubuntu-latest
-
     steps:
+      # 1️⃣ Checkout 仓库
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      # 2️⃣ Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
-      - name: Ensure jq installed
-        run: |
-          if ! command -v jq >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y jq
-          fi
-
-      - name: Install package-lock only (fast)
+      # 3️⃣ 安装依赖（仅生成 lock 文件，避免额外安装）
+      - name: Install dependencies (lock only)
         run: npm install --package-lock-only
 
+      # 4️⃣ 检测 Deprecated NPM 包
       - name: Detect deprecated NPM packages
         id: detect_deprecated
         run: |
-          # 清理旧文件
           rm -f deprecated_items.json deprecated.json
 
-          # 获取依赖名（dependencies + devDependencies）
           deps=$(jq -r '(.dependencies // {}) + (.devDependencies // {}) | keys[]' package.json 2>/dev/null || true)
 
-          # 如果没有依赖，写空数组并退出
           if [ -z "$deps" ]; then
             echo "[]">deprecated.json
             echo "0">deprecated_count.txt
@@ -45,65 +38,96 @@ jobs:
             exit 0
           fi
 
-          # 对每个包调用 `npm view <pkg> deprecated`，如果有信息则生成单独 JSON 对象（使用 jq --arg 安全转义）
           for pkg in $deps; do
-            info=$(npm view "$pkg" deprecated 2>/dev/null || true)
-            if [ -n "$info" ]; then
-              # 生成单条 JSON（安全传参）
-              jq -n --arg name "$pkg" --arg info "$info" '{name:$name, info:$info}' >> deprecated_items.json
+            deprecated_msg=$(npm view "$pkg" deprecated 2>/dev/null || true)
+            if [ -n "$deprecated_msg" ]; then
+              version_used=$(jq -r --arg p "$pkg" '.dependencies[$p] // .devDependencies[$p] // ""' package.json)
+              latest_version=$(npm view "$pkg" version 2>/dev/null || echo "unknown")
+              homepage=$(npm view "$pkg" homepage 2>/dev/null || echo "https://www.npmjs.com/package/$pkg")
+
+              jq -n \
+                --arg name "$pkg" \
+                --arg used "$version_used" \
+                --arg latest "$latest_version" \
+                --arg info "$deprecated_msg" \
+                --arg url "$homepage" \
+                '{name:$name, used:$used, latest:$latest, info:$info, url:$url}' >> deprecated_items.json
             fi
           done
 
-          # 合并为数组：如果没有任何条目则写空数组
           if [ -f deprecated_items.json ]; then
             jq -s '.' deprecated_items.json > deprecated.json
           else
             echo "[]">deprecated.json
           fi
 
-          # 输出数量
           count=$(jq 'length' deprecated.json)
           echo "$count" > deprecated_count.txt
           echo "Deprecated packages found: $count"
 
-      - name: Build message.txt safely
+      # 5️⃣ 拉取 Dependabot Alerts
+      - name: Fetch Dependabot Alerts
+        id: dependabot
+        env:
+          DEPENDABOT_PAT: ${{ secrets.PAT_FOR_DEPENDABOT }}
         run: |
-          # 读取数量
-          DEPRECATED_COUNT=$(cat deprecated_count.txt)
+          ALERTS=$(curl -s -H "Authorization: token $DEPENDABOT_PAT" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/dependabot/alerts?state=open")
 
-          # 起始头（包含仓库信息）
-          printf "%s\n" "⏰ Scheduled/Manual check for \`${{ github.repository }}\`" > message.txt
+          IS_ARRAY=$(echo "$ALERTS" | jq 'if type=="array" then true else false end')
+          if [ "$IS_ARRAY" != "true" ]; then
+            echo "Dependabot API 返回异常，使用空数组替代"
+            echo "[]" > dependabot.json
+          else
+            echo "$ALERTS" > dependabot.json
+          fi
+
+          COUNT=$(jq 'length' dependabot.json)
+          echo "$COUNT" > dependabot_count.txt
+          echo "Dependabot alerts found: $COUNT"
+
+      # 6️⃣ 构建消息
+      - name: Build Webex message
+        run: |
+          DEPRECATED_COUNT=$(cat deprecated_count.txt)
+          DEPENDABOT_COUNT=$(cat dependabot_count.txt)
+
+          printf "%s\n" "📋 Security & Maintenance Report for \`${{ github.repository }}\`" > message.txt
           printf "\n" >> message.txt
 
-          if [ "$DEPRECATED_COUNT" -gt 0 ]; then
-            printf "%s\n" "⚠️ **Deprecated / Unmaintained NPM packages**" >> message.txt
+          # Dependabot 部分
+          if [ "$DEPENDABOT_COUNT" -gt 0 ]; then
+            printf "%s\n" "🚨 **Dependabot Alerts** ($DEPENDABOT_COUNT found)" >> message.txt
+            jq -r '.[] | "- **\(.security_advisory.package.name)**: Severity: \(.security_advisory.severity)  
+  Patched: \(.security_advisory.fixed_version // "N/A")  
+  🔗 [View Alert](\(.html_url))"' dependabot.json >> message.txt
+            printf "\n" >> message.txt
+          else
+            printf "%s\n\n" "✅ No open Dependabot alerts." >> message.txt
+          fi
 
-            # 逐行追加每个 deprecated 描述（安全读取）
-            jq -r '.[] | "- **\(.name)**: \(.info)"' deprecated.json | while IFS= read -r line; do
-              printf "%s\n" "$line" >> message.txt
-            done
+          # Deprecated 部分
+          if [ "$DEPRECATED_COUNT" -gt 0 ]; then
+            printf "%s\n" "⚠️ **Deprecated / Unmaintained NPM packages** ($DEPRECATED_COUNT found)" >> message.txt
+            jq -r '.[] | "- **\(.name)** (used: \(.used), latest: \(.latest))**  
+  Reason: \(.info)  
+  🔗 [Homepage](\(.url))"' deprecated.json >> message.txt
           else
             printf "%s\n" "✅ No deprecated packages found." >> message.txt
           fi
 
-          # 打印供 Actions 日志查看（调试用）
           echo "===== message.txt START ====="
           cat message.txt
           echo "===== message.txt END ====="
 
-      - name: JSON-escape message and send to Webex
-        env:
-          WEBEX_BOT_TOKEN: ${{ secrets.WEBEX_BOT_TOKEN }}
-          WEBEX_ROOM_ID: ${{ secrets.WEBEX_ROOM_ID }}
+      # 7️⃣ JSON 转义 & 发送 Webex
+      - name: Send Alerts to Webex
         run: |
-          # 读取 message.txt 并用 Python 做 JSON 转义（安全）
           ESCAPED_MESSAGE=$(python3 -c "import json; print(json.dumps(open('message.txt').read()))")
-
-          # 发送到 Webex
           curl -s -X POST \
-            -H "Authorization: Bearer $WEBEX_BOT_TOKEN" \
+            -H "Authorization: Bearer ${{ secrets.WEBEX_BOT_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"roomId\": \"${WEBEX_ROOM_ID}\", \"markdown\": $ESCAPED_MESSAGE}" \
+            -d "{\"roomId\": \"${{ secrets.WEBEX_ROOM_ID }}\", \"markdown\": $ESCAPED_MESSAGE}" \
             https://webexapis.com/v1/messages
-
-          echo "Message sent to Webex (if credentials correct)."
+          echo "Message sent to Webex successfully."
