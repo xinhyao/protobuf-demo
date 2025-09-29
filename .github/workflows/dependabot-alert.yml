@@ -40,33 +40,6 @@ jobs:
           });
           fs.writeFileSync('deprecated.json', JSON.stringify(deprecated, null, 2));
           "
-
-      # 5️⃣ 拉取 Dependabot Alerts
-      - name: Fetch Dependabot Alerts
-        id: dependabot
-        env:
-          DEPENDABOT_PAT: ${{ secrets.PAT_FOR_DEPENDABOT }}
-        run: |
-          ALERTS=$(curl -s -H "Authorization: token $DEPENDABOT_PAT" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/xinhyao/protobuf-demo/dependabot/alerts?state=open")
-
-          IS_ARRAY=$(echo "$ALERTS" | jq 'if type=="array" then true else false end')
-          if [ "$IS_ARRAY" != "true" ]; then
-            echo "Dependabot API 返回异常，使用空数组替代"
-            echo "[]" > dependabot.json
-          else
-            echo "$ALERTS" > dependabot.json
-          fi
-
-          echo "===== Dependabot JSON START ====="
-          cat dependabot.json
-          echo "===== Dependabot JSON END ====="
-
-          COUNT=$(jq 'length' dependabot.json)
-          echo "DEPENDABOT_COUNT=$COUNT" >> $GITHUB_ENV
-          echo "Dependabot alerts count: $COUNT"
-
       # 6️⃣ 构建消息
       - name: Build Webex message
         id: message
