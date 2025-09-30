@@ -27,7 +27,7 @@ jobs:
       - name: Install dependencies (lock only)
         run: npm install --package-lock-only
 
-      # ----------------------------
+      # Deprecated packages
       - name: Detect deprecated NPM packages
         id: detect_deprecated
         run: |
@@ -68,7 +68,7 @@ jobs:
           printf "%s\n" "$count" > deprecated_count.txt
           printf "%s\n" "Deprecated packages found: $count"
 
-      # ----------------------------
+      # Dependabot Open Alerts
       - name: Fetch Open Dependabot Alerts
         id: dependabot_open
         env:
@@ -87,14 +87,14 @@ jobs:
           printf "%s\n" "$(jq 'length' dependabot_open.json)" > dependabot_open_count.txt
           printf "%s\n" "Dependabot open alerts found: $(cat dependabot_open_count.txt)"
 
-      #console
+      # console dependabot_open.json
       - name: Show Dependabot raw JSON
         run: |
-          echo "===== dependabot_closed.json START ====="
-          cat dependabot_closed.json | jq .
-          echo "===== dependabot_closed.json END ====="
+          echo "===== dependabot_open.json START ====="
+          cat dependabot_open.json | jq .
+          echo "===== dependabot_open.json END ====="
 
-      # ----------------------------
+      #  Dependabot closed Alerts
       - name: Fetch Closed Dependabot Alerts (recent 7 days)
         id: dependabot_closed
         env:
@@ -112,14 +112,14 @@ jobs:
           printf "%s\n" "$(jq 'length' dependabot_closed.json)" > dependabot_closed_count.txt
           printf "%s\n" "Dependabot recently-closed alerts found: $(cat dependabot_closed_count.txt)"
 
-      #console
+      # console dependabot_closed.json
       - name: Show Dependabot raw JSON
         run: |
           echo "===== dependabot_closed.json START ====="
           cat dependabot_closed.json | jq .
           echo "===== dependabot_closed.json END ====="
 
-      # ----------------------------
+      # Build Webex message
       - name: Build Webex message
         id: build_message
         run: |
@@ -127,11 +127,7 @@ jobs:
           DEPENDABOT_OPEN_COUNT=$(cat dependabot_open_count.txt)
           DEPENDABOT_CLOSED_COUNT=$(cat dependabot_closed_count.txt)
 
-          TIMESTAMP_UTC=$(date -u +"%Y-%m-%d %H:%M:%SZ")
-          TIMESTAMP_JST=$(TZ="Asia/Tokyo" date +"%Y-%m-%d %H:%M:%S %Z")
-
-          printf "%s\n" "📋 Security & Maintenance Report for Cantina\`" > message.txt
-          printf "%s\n" "Generated: UTC $TIMESTAMP_UTC | JST $TIMESTAMP_JST" >> message.txt
+          printf "%s\n" "📋 Security & Maintenance Report for Cantina" > message.txt
           printf "\n" >> message.txt
 
           # Dependabot open
@@ -146,7 +142,7 @@ jobs:
           # Dependabot recently closed
           if [ "$DEPENDABOT_CLOSED_COUNT" -gt 0 ]; then
             printf "%s\n" "🟢 **Recently Closed Dependabot Alerts (last 7 days)** ($DEPENDABOT_CLOSED_COUNT found)" >> message.txt
-            jq -r '.[] | "- **\(.security_vulnerability.package.name // .security_advisory.package.name // "unknown")** Closed at: \((.dismissed_at // .fixed_at) // .updated_at // "N/A")\n Patched: \(.security_vulnerability.first_patched_version.identifier // "N/A")\n Advisory: \(.security_advisory.summary // .security_advisory.description // "N/A")\n 🔗 [View Alert](\(.html_url // .url // "N/A"))"' dependabot_closed.json >> message.txt
+            jq -r '.[] | "- **\(.security_vulnerability.package.name // .security_advisory.package.name // "unknown")** (Closed at: \((.dismissed_at // .fixed_at) // .updated_at // "N/A"))\n Patched: \(.security_vulnerability.first_patched_version.identifier // "N/A")\n Advisory: \(.security_advisory.summary // .security_advisory.description // "N/A")\n 🔗 [View Alert](\(.html_url // .url // "N/A"))"' dependabot_closed.json >> message.txt
             printf "\n" >> message.txt
           else
             printf "%s\n\n" "✅ No recently closed Dependabot alerts." >> message.txt
@@ -165,8 +161,8 @@ jobs:
           cat message.txt
           printf "%s\n" "================================"
       
-      # ----------------------------
-      - name: Send Alerts to Webex
+      # Send Alerts to space
+      - name: Send Alerts to Webex space
         env:
           WEBEX_BOT_TOKEN: ${{ secrets.WEBEX_BOT_TOKEN }}
           WEBEX_ROOM_ID: ${{ secrets.WEBEX_ROOM_ID }}
