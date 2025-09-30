@@ -1,8 +1,8 @@
-name: Dependabot & Deprecated Alerts to Webex
+name: Dependabot & Deprecated Alerts to Webex space
 
 on:
   schedule:
-    - cron: "0 */8 * * *"  # 每 8 小时一次（UTC）
+    - cron: "0 */8 * * *"  # every 8 hours（UTC）
   workflow_dispatch:
 
 jobs:
@@ -77,7 +77,6 @@ jobs:
           ALERTS=$(curl -s -H "Authorization: token $DEPENDABOT_PAT" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/dependabot/alerts?state=open")
-          # 如果不是数组则写空数组
           IS_ARRAY=$(echo "$ALERTS" | jq 'if type=="array" then true else false end')
           if [ "$IS_ARRAY" != "true" ]; then
             printf "%s\n" "Dependabot Open API returned non-array; falling back to []"
@@ -88,6 +87,13 @@ jobs:
           printf "%s\n" "$(jq 'length' dependabot_open.json)" > dependabot_open_count.txt
           printf "%s\n" "Dependabot open alerts found: $(cat dependabot_open_count.txt)"
 
+      #console
+      - name: Show Dependabot raw JSON
+        run: |
+          echo "===== dependabot_closed.json START ====="
+          cat dependabot_closed.json | jq .
+          echo "===== dependabot_closed.json END ====="
+
       # ----------------------------
       - name: Fetch Closed Dependabot Alerts (recent 7 days)
         id: dependabot_closed
@@ -97,14 +103,21 @@ jobs:
           ALERTS=$(curl -s -H "Authorization: token $DEPENDABOT_PAT" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/dependabot/alerts?state=closed")
-          # 保守地筛选：必须有 dismissed_at 或 fixed_at,并且时间在最近 7 天以内
-          # 使用 fromdateiso8601 来做时间比较(jq 1.6)
+          # Filter: there must be dismissed_at or fixed_at, and the time is within the last 7 days
+          # Use fromdateiso8601 for time comparison (jq 1.6)
           printf "%s" "$ALERTS" | jq '[.[] 
             | select((.dismissed_at // .fixed_at) != null)
             | select(((.dismissed_at // .fixed_at) | fromdateiso8601) >= (now - 7*24*60*60))
           ]' > dependabot_closed.json
           printf "%s\n" "$(jq 'length' dependabot_closed.json)" > dependabot_closed_count.txt
           printf "%s\n" "Dependabot recently-closed alerts found: $(cat dependabot_closed_count.txt)"
+
+      #console
+      - name: Show Dependabot raw JSON
+        run: |
+          echo "===== dependabot_closed.json START ====="
+          cat dependabot_closed.json | jq .
+          echo "===== dependabot_closed.json END ====="
 
       # ----------------------------
       - name: Build Webex message
@@ -117,15 +130,14 @@ jobs:
           TIMESTAMP_UTC=$(date -u +"%Y-%m-%d %H:%M:%SZ")
           TIMESTAMP_JST=$(TZ="Asia/Tokyo" date +"%Y-%m-%d %H:%M:%S %Z")
 
-          printf "%s\n" "📋 Security & Maintenance Report for \`${{ github.repository }}\`" > message.txt
+          printf "%s\n" "📋 Security & Maintenance Report for Cantina\`" > message.txt
           printf "%s\n" "Generated: UTC $TIMESTAMP_UTC | JST $TIMESTAMP_JST" >> message.txt
           printf "\n" >> message.txt
 
           # Dependabot open
           if [ "$DEPENDABOT_OPEN_COUNT" -gt 0 ]; then
             printf "%s\n" "🚨 **Open Dependabot Alerts** ($DEPENDABOT_OPEN_COUNT found)" >> message.txt
-            # 参考字段: security_vulnerability.package.name, security_advisory.severity, security_vulnerability.first_patched_version.identifier, html_url, security_advisory.summary
-            jq -r '.[] | "- **\(.security_vulnerability.package.name // .security_advisory.package.name // "unknown")** Severity: \(.security_advisory.severity // "N/A")\n Patched: \(.security_vulnerability.first_patched_version.identifier // "N/A")\n 🔗 [View Alert](\(.html_url // .url // "N/A"))\n Advisory: \(.security_advisory.summary // .security_advisory.description // "N/A")"' dependabot_open.json >> message.txt
+            jq -r '.[] | "- **\(.security_vulnerability.package.name // .security_advisory.package.name // "unknown")** Severity: \(.security_advisory.severity // "N/A")\n Patched: \(.security_vulnerability.first_patched_version.identifier // "N/A")\n Advisory: \(.security_advisory.summary // .security_advisory.description // "N/A")\n 🔗 [View Alert](\(.html_url // .url // "N/A"))"' dependabot_open.json >> message.txt
             printf "\n" >> message.txt
           else
             printf "%s\n\n" "✅ No open Dependabot alerts." >> message.txt
@@ -133,9 +145,11 @@ jobs:
 
           # Dependabot recently closed
           if [ "$DEPENDABOT_CLOSED_COUNT" -gt 0 ]; then
-            printf "%s\n" "🟢 **Recently Closed Dependabot Alerts (last 7 days)** ($DEPENDABOT_CLOSED_COUNT)" >> message.txt
-            jq -r '.[] | "- **\(.security_vulnerability.package.name // .security_advisory.package.name // "unknown")** Closed at: \((.dismissed_at // .fixed_at) // .updated_at // "N/A")\n 🔗 [View Alert](\(.html_url // .url // "N/A"))\n Advisory: \(.security_advisory.summary // .security_advisory.description // "N/A")"' dependabot_closed.json >> message.txt
+            printf "%s\n" "🟢 **Recently Closed Dependabot Alerts (last 7 days)** ($DEPENDABOT_CLOSED_COUNT found)" >> message.txt
+            jq -r '.[] | "- **\(.security_vulnerability.package.name // .security_advisory.package.name // "unknown")** Closed at: \((.dismissed_at // .fixed_at) // .updated_at // "N/A")\n Patched: \(.security_vulnerability.first_patched_version.identifier // "N/A")\n Advisory: \(.security_advisory.summary // .security_advisory.description // "N/A")\n 🔗 [View Alert](\(.html_url // .url // "N/A"))"' dependabot_closed.json >> message.txt
             printf "\n" >> message.txt
+          else
+            printf "%s\n\n" "✅ No recently closed Dependabot alerts." >> message.txt
           fi
 
           # Deprecated packages
@@ -163,4 +177,4 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"roomId\": \"${WEBEX_ROOM_ID}\", \"markdown\": $ESCAPED_MESSAGE}" \
             https://webexapis.com/v1/messages
-          printf "%s\n" "Message sent to Webex (if credentials are correct)."
+          printf "%s\n" "Message sent to Webex space successfully."
