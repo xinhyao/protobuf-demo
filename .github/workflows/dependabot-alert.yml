@@ -133,7 +133,7 @@ jobs:
           # Dependabot open
           if [ "$DEPENDABOT_OPEN_COUNT" -gt 0 ]; then
             printf "%s\n" "🚨 **Open Dependabot Alerts** ($DEPENDABOT_OPEN_COUNT found)" >> message.txt
-            jq -r '.[] | "- **\(.security_vulnerability.package.name // .security_advisory.package.name // "unknown")** Severity: \(.security_advisory.severity // "N/A")\n Patched: \(.security_vulnerability.first_patched_version.identifier // "N/A")\n Advisory: \(.security_advisory.summary // .security_advisory.description // "N/A")\n 🔗 [View Alert](\(.html_url // .url // "N/A"))"' dependabot_open.json >> message.txt
+            jq -r '.[] | "- **\(.security_vulnerability.package.name // .security_advisory.package.name // "unknown")** Severity: \(.security_advisory.severity // "N/A")\n Affected: \(.security_vulnerability.vulnerable_version_range // "N/A")\n Patched: \(.security_vulnerability.first_patched_version.identifier // "N/A")\n Advisory: \(.security_advisory.summary // .security_advisory.description // "N/A")\n 🔗 [View Alert](\(.html_url // .url // "N/A"))"' dependabot_open.json >> message.txt
             printf "\n" >> message.txt
           else
             printf "%s\n\n" "✅ No open Dependabot alerts." >> message.txt
@@ -142,7 +142,7 @@ jobs:
           # Dependabot recently closed
           if [ "$DEPENDABOT_CLOSED_COUNT" -gt 0 ]; then
             printf "%s\n" "🟢 **Recently Closed Dependabot Alerts (last 7 days)** ($DEPENDABOT_CLOSED_COUNT found)" >> message.txt
-            jq -r '.[] | "- **\(.security_vulnerability.package.name // .security_advisory.package.name // "unknown")** (Closed at: \((.dismissed_at // .fixed_at) // .updated_at // "N/A"))\n Patched: \(.security_vulnerability.first_patched_version.identifier // "N/A")\n Advisory: \(.security_advisory.summary // .security_advisory.description // "N/A")\n 🔗 [View Alert](\(.html_url // .url // "N/A"))"' dependabot_closed.json >> message.txt
+            jq -r '.[] | "- **\(.security_vulnerability.package.name // .security_advisory.package.name // "unknown")** Severity: \(.security_advisory.severity // "N/A")\n Closed at: \((.dismissed_at // .fixed_at) // .updated_at // "N/A")\n Affected: \(.security_vulnerability.vulnerable_version_range // "N/A")\n Patched: \(.security_vulnerability.first_patched_version.identifier // "N/A")\n Advisory: \(.security_advisory.summary // .security_advisory.description // "N/A")\n 🔗 [View Alert](\(.html_url // .url // "N/A"))"' dependabot_closed.json >> message.txt
             printf "\n" >> message.txt
           else
             printf "%s\n\n" "✅ No recently closed Dependabot alerts." >> message.txt
