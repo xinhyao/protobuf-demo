@@ -9,32 +9,36 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      # 1️⃣ Checkout 仓库
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
-      # 3️⃣ 安装依赖（仅生成 lock 文件，避免额外安装）
+      - name: Ensure jq installed
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+
       - name: Install dependencies (lock only)
         run: npm install --package-lock-only
 
-      # 4️⃣ 检测 Deprecated NPM 包
+      # ----------------------------
       - name: Detect deprecated NPM packages
         id: detect_deprecated
         run: |
-          rm -f deprecated_items.json deprecated.json
+          rm -f deprecated_items.json deprecated.json || true
 
           deps=$(jq -r '(.dependencies // {}) + (.devDependencies // {}) | keys[]' package.json 2>/dev/null || true)
 
           if [ -z "$deps" ]; then
-            echo "[]">deprecated.json
-            echo "0">deprecated_count.txt
-            echo "No dependencies found in package.json"
+            printf "%s" "[]" > deprecated.json
+            printf "%s\n" 0 > deprecated_count.txt
+            printf "%s\n" "No dependencies found in package.json"
             exit 0
           fi
 
@@ -44,7 +48,6 @@ jobs:
               version_used=$(jq -r --arg p "$pkg" '.dependencies[$p] // .devDependencies[$p] // ""' package.json)
               latest_version=$(npm view "$pkg" version 2>/dev/null || echo "unknown")
               homepage=$(npm view "$pkg" homepage 2>/dev/null || echo "https://www.npmjs.com/package/$pkg")
-
               jq -n \
                 --arg name "$pkg" \
                 --arg used "$version_used" \
@@ -58,72 +61,106 @@ jobs:
           if [ -f deprecated_items.json ]; then
             jq -s '.' deprecated_items.json > deprecated.json
           else
-            echo "[]">deprecated.json
+            printf "%s" "[]" > deprecated.json
           fi
 
           count=$(jq 'length' deprecated.json)
-          echo "$count" > deprecated_count.txt
-          echo "Deprecated packages found: $count"
+          printf "%s\n" "$count" > deprecated_count.txt
+          printf "%s\n" "Deprecated packages found: $count"
 
-      # 5️⃣ 拉取 Dependabot Alerts
-      - name: Fetch Dependabot Alerts
-        id: dependabot
+      # ----------------------------
+      - name: Fetch Open Dependabot Alerts
+        id: dependabot_open
         env:
           DEPENDABOT_PAT: ${{ secrets.PAT_FOR_DEPENDABOT }}
         run: |
           ALERTS=$(curl -s -H "Authorization: token $DEPENDABOT_PAT" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/dependabot/alerts?state=open")
-
+          # 如果不是数组则写空数组
           IS_ARRAY=$(echo "$ALERTS" | jq 'if type=="array" then true else false end')
           if [ "$IS_ARRAY" != "true" ]; then
-            echo "Dependabot API 返回异常，使用空数组替代"
-            echo "[]" > dependabot.json
+            printf "%s\n" "Dependabot Open API returned non-array; falling back to []"
+            printf "%s" "[]" > dependabot_open.json
           else
-            echo "$ALERTS" > dependabot.json
+            printf "%s" "$ALERTS" > dependabot_open.json
           fi
+          printf "%s\n" "$(jq 'length' dependabot_open.json)" > dependabot_open_count.txt
+          printf "%s\n" "Dependabot open alerts found: $(cat dependabot_open_count.txt)"
 
-          COUNT=$(jq 'length' dependabot.json)
-          echo "$COUNT" > dependabot_count.txt
-          echo "Dependabot alerts found: $COUNT"
+      # ----------------------------
+      - name: Fetch Closed Dependabot Alerts (recent 7 days)
+        id: dependabot_closed
+        env:
+          DEPENDABOT_PAT: ${{ secrets.PAT_FOR_DEPENDABOT }}
+        run: |
+          ALERTS=$(curl -s -H "Authorization: token $DEPENDABOT_PAT" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/dependabot/alerts?state=closed")
+          # 保守地筛选：必须有 dismissed_at 或 fixed_at,并且时间在最近 7 天以内
+          # 使用 fromdateiso8601 来做时间比较(jq 1.6)
+          printf "%s" "$ALERTS" | jq '[.[] 
+            | select((.dismissed_at // .fixed_at) != null)
+            | select(((.dismissed_at // .fixed_at) | fromdateiso8601) >= (now - 7*24*60*60))
+          ]' > dependabot_closed.json
+          printf "%s\n" "$(jq 'length' dependabot_closed.json)" > dependabot_closed_count.txt
+          printf "%s\n" "Dependabot recently-closed alerts found: $(cat dependabot_closed_count.txt)"
 
-      # 6️⃣ 构建消息
+      # ----------------------------
       - name: Build Webex message
+        id: build_message
         run: |
           DEPRECATED_COUNT=$(cat deprecated_count.txt)
-          DEPENDABOT_COUNT=$(cat dependabot_count.txt)
+          DEPENDABOT_OPEN_COUNT=$(cat dependabot_open_count.txt)
+          DEPENDABOT_CLOSED_COUNT=$(cat dependabot_closed_count.txt)
+
+          TIMESTAMP_UTC=$(date -u +"%Y-%m-%d %H:%M:%SZ")
+          TIMESTAMP_JST=$(TZ="Asia/Tokyo" date +"%Y-%m-%d %H:%M:%S %Z")
 
           printf "%s\n" "📋 Security & Maintenance Report for \`${{ github.repository }}\`" > message.txt
+          printf "%s\n" "Generated: UTC $TIMESTAMP_UTC | JST $TIMESTAMP_JST" >> message.txt
           printf "\n" >> message.txt
 
-          # Dependabot 部分
-          if [ "$DEPENDABOT_COUNT" -gt 0 ]; then
-            printf "%s\n" "🚨 **Dependabot Alerts** ($DEPENDABOT_COUNT found)" >> message.txt
-            jq -r '.[] | "- **\(.security_vulnerability.package.name)**: Severity: \(.security_advisory.severity)\n  Patched: \(.security_vulnerability.first_patched_version.identifier // "N/A")\n 🔗 [View Alert](\(.html_url))"' dependabot.json >> message.txt
+          # Dependabot open
+          if [ "$DEPENDABOT_OPEN_COUNT" -gt 0 ]; then
+            printf "%s\n" "🚨 **Open Dependabot Alerts** ($DEPENDABOT_OPEN_COUNT found)" >> message.txt
+            # 参考字段: security_vulnerability.package.name, security_advisory.severity, security_vulnerability.first_patched_version.identifier, html_url, security_advisory.summary
+            jq -r '.[] | "- **\(.security_vulnerability.package.name // .security_advisory.package.name // "unknown")** Severity: \(.security_advisory.severity // "N/A")\n Patched: \(.security_vulnerability.first_patched_version.identifier // "N/A")\n 🔗 [View Alert](\(.html_url // .url // "N/A"))\n Advisory: \(.security_advisory.summary // .security_advisory.description // "N/A")"' dependabot_open.json >> message.txt
             printf "\n" >> message.txt
           else
             printf "%s\n\n" "✅ No open Dependabot alerts." >> message.txt
           fi
 
-          # Deprecated 部分
+          # Dependabot recently closed
+          if [ "$DEPENDABOT_CLOSED_COUNT" -gt 0 ]; then
+            printf "%s\n" "🟢 **Recently Closed Dependabot Alerts (last 7 days)** ($DEPENDABOT_CLOSED_COUNT)" >> message.txt
+            jq -r '.[] | "- **\(.security_vulnerability.package.name // .security_advisory.package.name // "unknown")** Closed at: \((.dismissed_at // .fixed_at) // .updated_at // "N/A")\n 🔗 [View Alert](\(.html_url // .url // "N/A"))\n Advisory: \(.security_advisory.summary // .security_advisory.description // "N/A")"' dependabot_closed.json >> message.txt
+            printf "\n" >> message.txt
+          fi
+
+          # Deprecated packages
           if [ "$DEPRECATED_COUNT" -gt 0 ]; then
             printf "%s\n" "⚠️ **Deprecated / Unmaintained NPM packages** ($DEPRECATED_COUNT found)" >> message.txt
-            jq -r '.[] | "- **\(.name)** (used: \(.used), latest: \(.latest))**\n Reason: \(.info)\n 🔗 [Homepage](\(.url))"' deprecated.json >> message.txt
+            jq -r '.[] | "- **\(.name)** (used: \(.used), latest: \(.latest))\n  Reason: \(.info)\n  🔗 [Homepage](\(.url))"' deprecated.json >> message.txt
+            printf "\n" >> message.txt
           else
             printf "%s\n" "✅ No deprecated packages found." >> message.txt
           fi
 
-          echo "===== message.txt START ====="
+          printf "%s\n" "===== message.txt preview ====="
           cat message.txt
-          echo "===== message.txt END ====="
-
-      # 7️⃣ JSON 转义 & 发送 Webex
+          printf "%s\n" "================================"
+      
+      # ----------------------------
       - name: Send Alerts to Webex
+        env:
+          WEBEX_BOT_TOKEN: ${{ secrets.WEBEX_BOT_TOKEN }}
+          WEBEX_ROOM_ID: ${{ secrets.WEBEX_ROOM_ID }}
         run: |
           ESCAPED_MESSAGE=$(python3 -c "import json; print(json.dumps(open('message.txt').read()))")
           curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.WEBEX_BOT_TOKEN }}" \
+            -H "Authorization: Bearer $WEBEX_BOT_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"roomId\": \"${{ secrets.WEBEX_ROOM_ID }}\", \"markdown\": $ESCAPED_MESSAGE}" \
+            -d "{\"roomId\": \"${WEBEX_ROOM_ID}\", \"markdown\": $ESCAPED_MESSAGE}" \
             https://webexapis.com/v1/messages
-          echo "Message sent to Webex successfully."
+          printf "%s\n" "Message sent to Webex (if credentials are correct)."
