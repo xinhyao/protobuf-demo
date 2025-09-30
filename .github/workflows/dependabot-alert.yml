@@ -99,7 +99,7 @@ jobs:
           # Dependabot 部分
           if [ "$DEPENDABOT_COUNT" -gt 0 ]; then
             printf "%s\n" "🚨 **Dependabot Alerts** ($DEPENDABOT_COUNT found)" >> message.txt
-            jq -r '.[] | "- **\(.security_advisory.package.name)**: Severity: \(.security_advisory.severity)\n  Patched: \(.security_advisory.fixed_version // "N/A")\n 🔗 [View Alert](\(.html_url))"' dependabot.json >> message.txt
+            jq -r '.[] | "- **\(.security_vulnerability.package.name)**: Severity: \(.security_advisory.severity)\n  Patched: \(.security_vulnerability.first_patched_version.identifier // "N/A")\n 🔗 [View Alert](\(.html_url))"' dependabot.json >> message.txt
             printf "\n" >> message.txt
           else
             printf "%s\n\n" "✅ No open Dependabot alerts." >> message.txt
